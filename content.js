@@ -5,9 +5,9 @@
  * 处理流程：
  *   1. 图片 → 放行（X 原生放大）
  *   2. 链接 → 外链放行，status 链接按规则处理
- *   3. 嵌套推文 → 阻止跳转
- *   4. 引用推文卡片 → 阻止跳转
- *   5. role="link" 卡片 → 阻止跳转
+ *   3. 嵌套推文 → 阻止跳转，新标签打开引用推文
+ *   4. 引用推文卡片 → 阻止跳转，新标签打开引用推文
+ *   5. role="link" 卡片 → 阻止跳转，新标签打开引用推文
  *   6. 交互按钮 → 放行
  *   7. 提取推文 URL → 详情页仅阻止 / 列表页新标签打开
  */
@@ -70,6 +70,31 @@
     return null;
   }
 
+  /** 从引用推文区域提取链接的推文 URL，扩大搜索范围到父容器 */
+  function extractQuotedTweetUrl(target) {
+    // 1. 从 quoteTweet 或 role="link" 容器内找
+    const container = target.closest('[data-testid="quoteTweet"]') || target.closest('[role="link"]');
+    if (container) {
+      const statusLink = container.querySelector('a[href*="/status/"]');
+      if (statusLink) return statusLink.getAttribute('href');
+    }
+
+    // 2. 检查父元素（链接可能是兄弟节点而非容器内部）
+    const parent = container ? container.parentElement : target.parentElement;
+    if (parent) {
+      // 父元素本身是 <a>
+      if (parent.tagName === 'A') {
+        const href = parent.getAttribute('href') || '';
+        if (href.includes('/status/')) return href;
+      }
+      // 在父元素内搜索
+      const statusLink = parent.querySelector(':scope > a[href*="/status/"]');
+      if (statusLink) return statusLink.getAttribute('href');
+    }
+
+    return null;
+  }
+
   /** 构建完整 URL */
   function buildFullUrl(href) {
     return href.startsWith('http') ? href : 'https://x.com' + href;
@@ -122,33 +147,44 @@
         const linkHref = clickedLink.getAttribute('href') || '';
         // 外部链接、用户主页、话题标签 → 放行
         if (!linkHref.includes('/status/')) return;
-        // 指向 /status/ 的链接：其他推文 → 阻止；自身 → 继续往下
+        // 指向 /status/ 的链接：其他推文 → 阻止并新标签打开；自身 → 继续往下
         const tweetUrl = extractTweetUrl(tweet);
         if (tweetUrl && linkHref !== tweetUrl) {
           blockEvent(event);
+          window.open(buildFullUrl(linkHref), '_blank');
           return;
         }
       }
 
-      // ---- 3. 嵌套推文（article 内的 article）：阻止跳转 ----
+      // ---- 3. 嵌套推文（article 内的 article）：提取 URL 并新标签打开 ----
       if (tweet.parentElement?.closest('article[data-testid="tweet"]')) {
         blockEvent(event);
+        const quotedUrl = extractTweetUrl(tweet);
+        if (quotedUrl) window.open(buildFullUrl(quotedUrl), '_blank');
         return;
       }
 
-      // ---- 4. 引用推文卡片：阻止跳转 ----
+      // ---- 4. 引用推文卡片：提取 URL 并新标签打开 ----
       if (target.closest(NESTED_TWEET_SELECTORS)) {
         blockEvent(event);
+        const quotedUrl = extractQuotedTweetUrl(target);
+        if (quotedUrl) window.open(buildFullUrl(quotedUrl), '_blank');
         return;
       }
 
-      // ---- 5. role="link" 可点击卡片：阻止跳转 ----
+      // ---- 5. role="link" 可点击卡片：提取 URL 并新标签打开 ----
       if (
         target.closest('[role="link"]') &&
         target.closest('[role="link"]') !== tweet &&
         !clickedLink
       ) {
-        blockEvent(event);
+        const quotedUrl = extractQuotedTweetUrl(target);
+        if (quotedUrl) {
+          blockEvent(event);
+          window.open(buildFullUrl(quotedUrl), '_blank');
+          return;
+        }
+        // 找不到 URL 时不阻止，让 X 原生处理（当前页跳转）
         return;
       }
 
